@@ -13,6 +13,8 @@ import {
   PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, PieChart, Pie, Cell 
 } from 'recharts';
 
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+
 // --- INITIAL DEMO DATABASE & CURRICULUM DATA ---
 const INITIAL_BRANCHES = [
   { id: 'cse', name: 'Computer Science & Engg.' },
@@ -283,6 +285,8 @@ export default function App() {
   });
 
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [branches, setBranches] = useState(INITIAL_BRANCHES);
+  const [backendStatus, setBackendStatus] = useState({ state: 'connecting', error: '' });
   const [subjects, setSubjects] = useState(() => {
     const saved = localStorage.getItem('aktu_subjects');
     return saved ? JSON.parse(saved) : INITIAL_SUBJECTS;
@@ -324,6 +328,56 @@ export default function App() {
   const [currentMock, setCurrentMock] = useState(null);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadBackendData = async () => {
+      try {
+        const [healthResponse, branchesResponse, subjectsResponse] = await Promise.all([
+          fetch(`${API_BASE_URL}/api/health`),
+          fetch(`${API_BASE_URL}/api/branches`),
+          fetch(`${API_BASE_URL}/api/subjects`)
+        ]);
+        const responses = [healthResponse, branchesResponse, subjectsResponse];
+        const failedResponse = responses.find(response => !response.ok);
+        if (failedResponse) {
+          throw new Error(`Backend request failed (${failedResponse.status})`);
+        }
+
+        const [health, remoteBranches, remoteSubjects] = await Promise.all(
+          responses.map(response => response.json())
+        );
+        if (health.status !== 'ok' || !Array.isArray(remoteBranches) || !Array.isArray(remoteSubjects)) {
+          throw new Error('Backend returned an unexpected response');
+        }
+
+        if (cancelled) return;
+        setBranches(remoteBranches);
+        setSubjects(currentSubjects => {
+          const localSubjects = new Map(currentSubjects.map(subject => [subject.id, subject]));
+          const remoteIds = new Set(remoteSubjects.map(subject => subject.id));
+          const mergedSubjects = remoteSubjects.map(remoteSubject => {
+            const localSubject = localSubjects.get(remoteSubject.id);
+            return localSubject
+              ? { ...localSubject, ...remoteSubject, units: localSubject.units?.length ? localSubject.units : remoteSubject.units }
+              : remoteSubject;
+          });
+          return [...mergedSubjects, ...currentSubjects.filter(subject => !remoteIds.has(subject.id))];
+        });
+        setBackendStatus({ state: 'online', error: '' });
+      } catch (error) {
+        if (cancelled) return;
+        console.error('Unable to connect to the AKTU backend:', error);
+        setBackendStatus({ state: 'offline', error: error.message });
+      }
+    };
+
+    loadBackendData();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Save changes to localStorage
   useEffect(() => {
@@ -405,7 +459,10 @@ export default function App() {
 
         {/* AUTH SCREEN OR MAIN APP */}
         {!user ? (
-          <AuthScreen onLogin={(userObj) => { setUser(userObj); showToast(`Welcome, ${userObj.name}!`); }} />
+          <AuthScreen
+            branches={branches}
+            onLogin={(userObj) => { setUser(userObj); showToast(`Welcome, ${userObj.name}!`); }}
+          />
         ) : (
           <div className="flex h-screen overflow-hidden">
             {/* DESKTOP SIDEBAR */}
@@ -464,7 +521,7 @@ export default function App() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-semibold truncate">{user.name}</p>
-                    <p className="text-xs text-slate-400 truncate">{INITIAL_BRANCHES.find(b => b.id === user.branch)?.name} • Sem {user.semester}</p>
+                    <p className="text-xs text-slate-400 truncate">{branches.find(b => b.id === user.branch)?.name} • Sem {user.semester}</p>
                   </div>
                 </div>
 
@@ -523,6 +580,26 @@ export default function App() {
                   <div className="px-3 py-1 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 text-xs font-semibold">
                     AKTU Sem {user.semester}
                   </div>
+                  <div
+                    className={`hidden lg:flex items-center gap-1.5 px-3 py-1 rounded-full border text-xs font-semibold ${
+                      backendStatus.state === 'online'
+                        ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20'
+                        : backendStatus.state === 'offline'
+                          ? 'bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/20'
+                          : 'bg-slate-500/10 text-slate-500 border-slate-500/20'
+                    }`}
+                    title={backendStatus.error || 'Backend API connection status'}
+                    aria-live="polite"
+                  >
+                    {backendStatus.state === 'online' ? <CheckCircle2 className="w-3.5 h-3.5" /> : <AlertTriangle className="w-3.5 h-3.5" />}
+                    <span>
+                      {backendStatus.state === 'online'
+                        ? 'Backend connected'
+                        : backendStatus.state === 'offline'
+                          ? 'Demo mode'
+                          : 'Connecting'}
+                    </span>
+                  </div>
                 </div>
               </header>
 
@@ -577,7 +654,8 @@ export default function App() {
                 {activeTab === 'dashboard' && (
                   <DashboardView 
                     user={user} 
-                    subjects={filteredSubjects} 
+                    branches={branches}
+                    subjects={filteredSubjects}
                     pyqs={pyqs}
                     mockTests={mockTests}
                     attempts={testAttempts}
@@ -701,12 +779,12 @@ export default function App() {
   // ==========================================
   // 1. AUTHENTICATION & LOGIN SCREEN
   // ==========================================
-  function AuthScreen({ onLogin }) {
+  function AuthScreen({ branches, onLogin }) {
     const [isSignUp, setIsSignUp] = useState(false);
     const [showPassword, setShowPassword] = useState(false);
     const [formData, setFormData] = useState({
-      name: 'Rahul Sharma',
-      email: 'rahul.aktu@gmail.com',
+      name: 'Khushi Singh',
+      email: 'khushiaktu@gmail.com',
       password: 'password123',
       branch: 'cse',
       semester: 3,
@@ -843,7 +921,7 @@ export default function App() {
                 onChange={e => setFormData({ ...formData, branch: e.target.value })}
                 className="w-full px-3 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-xs focus:outline-none focus:border-blue-500 text-white"
               >
-                {INITIAL_BRANCHES.map(b => (
+                {branches.map(b => (
                   <option key={b.id} value={b.id}>{b.name}</option>
                 ))}
               </select>
@@ -900,8 +978,8 @@ export default function App() {
 // ==========================================
 // 2. STUDENT DASHBOARD VIEW
 // ==========================================
-function DashboardView({ user, subjects, pyqs, mockTests, attempts, onNavigate, onStartMock }) {
-  const branchName = INITIAL_BRANCHES.find(b => b.id === user.branch)?.name;
+function DashboardView({ user, branches, subjects, pyqs, mockTests, attempts, onNavigate, onStartMock }) {
+  const branchName = branches.find(b => b.id === user.branch)?.name;
 
   return (
     <div className="space-y-6">

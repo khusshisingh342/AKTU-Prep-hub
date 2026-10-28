@@ -1,14 +1,23 @@
+import os
 from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="AKTU Marks API", version="1.0.0", description="Starter API for the AKTU Marks frontend")
+app = FastAPI(
+    title="AKTU Marks Portal",
+    version="1.0.0",
+    description="Backend API for the AKTU Marks student portal",
+)
 
-# For local development only. Restrict this to your deployed frontend domain in production.
+frontend_origins = os.getenv(
+    "FRONTEND_ORIGINS",
+    "http://localhost:5173,http://127.0.0.1:5173",
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=[origin.strip() for origin in frontend_origins.split(",") if origin.strip()],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -24,8 +33,6 @@ BRANCHES = [
     {"id": "ce", "name": "Civil Engineering"},
 ]
 
-# Starter sample records. Add/migrate the rest of the frontend's demo curriculum here
-# before treating this API as the app's source of truth.
 SUBJECTS = [
     {"id": "kcs301", "code": "KCS-301", "name": "Data Structures", "sem": 3,
      "branches": ["cse", "cse_aiml", "it"], "verified": True,
@@ -37,34 +44,39 @@ SUBJECTS = [
          {"id": 5, "name": "Unit 5: Searching, Sorting & Hashing", "topics": "Bubble, Quick, Merge, Heap Sort, Hash functions, Collision resolution"},
      ]},
     {"id": "kcs302", "code": "KCS-302", "name": "Computer System Architecture (COA)", "sem": 3,
-     "branches": ["cse", "cse_aiml", "it"], "verified": True, "units": []},
+     "branches": ["cse", "cse_aiml", "it"], "verified": True,
+     "units": [{"id": 1, "name": "Unit 1: Basic Computer Organization", "topics": "Instruction codes, registers, ALU"}]},
     {"id": "kcs303", "code": "KCS-303", "name": "Discrete Structures & Theory of Logic", "sem": 3,
-     "branches": ["cse", "cse_aiml", "it"], "verified": True, "units": []},
+     "branches": ["cse", "cse_aiml", "it"], "verified": True,
+     "units": [{"id": 1, "name": "Unit 1: Set Theory & Logic", "topics": "Propositions, predicates, set operations"}]},
 ]
 
-# Temporary in-memory demo stores; data resets when the server restarts.
 BOOKMARKS: dict[str, list[str]] = {}
 NOTES: dict[str, dict[str, str]] = {}
 ATTEMPTS: dict[str, list[dict[str, Any]]] = {}
 
 class NotePayload(BaseModel):
-    user_id: str = Field(min_length=1)
-    question_id: str = Field(min_length=1)
-    text: str = ""
+    user_id: str = Field(min_length=1, max_length=255)
+    question_id: str = Field(min_length=1, max_length=255)
+    text: str = Field(default="", max_length=20_000)
 
 class BookmarkPayload(BaseModel):
-    user_id: str = Field(min_length=1)
-    question_id: str = Field(min_length=1)
+    user_id: str = Field(min_length=1, max_length=255)
+    question_id: str = Field(min_length=1, max_length=255)
 
 class AttemptPayload(BaseModel):
-    user_id: str = Field(min_length=1)
-    test_id: str = Field(min_length=1)
+    user_id: str = Field(min_length=1, max_length=255)
+    test_id: str = Field(min_length=1, max_length=255)
     score: float = Field(ge=0)
     max_score: float = Field(gt=0)
 
 @app.get("/")
 def root():
-    return {"message": "AKTU Marks API is running", "docs": "/docs"}
+    return {
+        "message": "AKTU Marks API is running",
+        "docs": "/docs",
+        "frontend": "http://localhost:5173",
+    }
 
 @app.get("/api/health")
 def health():
@@ -103,7 +115,11 @@ def toggle_bookmark(payload: BookmarkPayload):
     else:
         saved.append(payload.question_id)
         is_bookmarked = True
-    return {"question_id": payload.question_id, "bookmarked": is_bookmarked, "question_ids": saved}
+    return {
+        "question_id": payload.question_id,
+        "bookmarked": is_bookmarked,
+        "question_ids": saved,
+    }
 
 @app.get("/api/users/{user_id}/notes")
 def get_notes(user_id: str):
